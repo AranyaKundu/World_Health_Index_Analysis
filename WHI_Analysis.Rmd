@@ -1,0 +1,482 @@
+---
+title: "Data Science Project"
+author: "Aranya Kundu"
+date: "2023-02-09"
+output:
+  prettydoc::html_pretty:
+    theme: leonids
+    math: katex
+    highlight: github
+---
+
+```{r}
+# call the necessary libraries
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(splitstackshape)
+library(forecast)
+library(gam)
+library(neuralnet)
+library(xgboost)
+library(cluster)
+library(tidyr)
+library(knitr)
+```
+
+```{r eval=FALSE}
+# read all the data files
+whr_2013 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2013.csv', header = T)
+whr_2015 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2015.csv', header = T)
+whr_2016 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2016.csv', header = T)
+whr_2017 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2017.csv', header = T)
+whr_2018 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2018.csv', header = T)
+whr_2019 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2019.csv', header = T)
+whr_2020 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2020.csv', header = T)
+whr_2021 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2021.csv', header = T)
+whr_2022 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2022.csv', header = T)
+whr_2023 = read.csv(file = 'D:/Coursework/DS Projects/WHI/World Happiness Report 2023.csv', header = T)
+
+```
+
+#### An alternate way of reading the data files is to read and preprocess the data without disrupting the source data and save the preprocessed data in a rda file.
+
++ We need to do this part of the exercise only once. I did this to remove all missing values from each dataframe and preprocess the data for modeling. 
+
+*Caveat:* We already know that the the data for the year 2014 is missing. So, the data frames from numbers 1 - 10 represents data for the years 2013 - 2023 except 2014. and data frame 11 has the combined data for all the years.
+
+```{r eval=FALSE}
+
+file_list = list.files(path = 'D:/Coursework/DS Projects/WHI/', pattern = "*.csv")
+df <- vector(mode = 'list', length = length(file_list))
+for (i in seq_along(file_list)){
+  file_path = file.path('D:/Coursework/DS Projects/WHI/', file_list[i])
+  data <- read.csv(file = file_path, header = T)
+  # print(dim(data))
+  names(data) <- make.names(names(data))
+  df[[i]] <- data[, !duplicated(t(data))]
+  print(dim(df[[i]]))
+}
+```
+
+*Note:* It is very important to understand the data in order to preprocess it. 
++ The data has some missing values in each data frame. I have chosen to compute column-wise mean and place the missing values in the respective data frames. This completely makes sense for the given data. Although in some cases, it might be underestimated or overestimated, but overall it will not impact too much.
++ However, we cannot perform `colMeans` on the whole data frame, because some columns are non-numeric. Luckily for us, the non-numeric columns occur in the 1st two columns and we can compute `colMeans` on the rest of the data frame and do our imputation for the missing data.<br><br>
+
+Let us code what we mentioned above.
+
+```{r eval=FALSE}
+for (i in 1:length(df)){
+  missing_count <- rowSums(is.na(df[[i]]))
+  rows <- df[[i]][missing_count > 0, ]
+  
+  if (nrow(rows) > 0) {
+    means <- colMeans(df[[i]][, -c(1, 2)], na.rm = T)
+    df[[i]][missing_count > 0, ] <- lapply(df[[i]][missing_count > 0, ], function(x) {
+      ifelse(is.na(x), means, x)
+    })
+  }
+}
+
+save(df, file = "WHI.rda") # save the preprocessed data in a rda file
+```
+
+#### Now we can load the data from the saved rda file without disturbing the original data and not requiring to preprocess everytime we run it. Also, we have to load the data. This part is boring, but we have to do it once.
+
+```{r}
+load('WHI.rda')
+
+whr_2013 <- df[[1]]
+whr_2015 <- df[[2]]
+whr_2016 <- df[[3]]
+whr_2017 <- df[[4]]
+whr_2018 <- df[[5]]
+whr_2019 <- df[[6]]
+whr_2020 <- df[[7]]
+whr_2021 <- df[[8]]
+whr_2022 <- df[[9]]
+whr_2023 <- df[[10]]
+whr_2013_23 <- df[[11]]
+```
+
+
+```{r}
+# Nothing common among all the data sets: Need to prepare items if we want to do machine learning
+lists = list(names(whr_2013), names(whr_2015), names(whr_2016), names(whr_2017), names(whr_2018), 
+             names(whr_2019), names(whr_2020), names(whr_2021), names(whr_2022), names(whr_2023))
+intersection = Reduce(intersect, lists)
+```
+
+```{r}
+# Data Visualization on 1st data set
+plot1 <- ggplot(data = whr_2013, aes(x=GDP.per.capita, y = Happiness..Yesterday.)) + 
+  geom_line(color="blue") + 
+  theme_bw() + 
+  theme(panel.background = element_blank())
+
+plot1 # no visible relationship
+
+```
+
+```{r}
+set.seed(7)
+split <- splitstackshape::stratified(whr_2013, group = "Generosity", size = 0.30, bothSets = T)
+train_data <- split[[2]]
+test_data <- split[[1]]
+```
+
+```{r}
+linear_model <- lm(formula = Happiness..Yesterday. ~ Ladder + Social.Support + Corruption + Freedom + Donation + GDP.per.capita + Healthy.life.expectancy, data = train_data)
+
+preds <- predict(linear_model, newdata = test_data)
+accuracy(preds, test_data$Happiness..Yesterday.)
+summary(linear_model)
+```
+
+*Insights:* $R^2$ is only 53% and adjusted $R^2$ is lesser at only 50%. The `RMSE` is 0.137 might not be a very good indicator as the target variable values are also very less. The error can be better understood by `MAPE` which is very high at 17%. Let's try to fit more complicated models to check if the prediction performance improves.
+
+```{r}
+gam_model <- gam(formula = Happiness..Yesterday. ~ s(Ladder, 4) + s(Social.Support, 4) + s(Corruption, 4) + 
+                   s(Freedom, 4) + s(Donation, 4) + s(GDP.per.capita, 4) + s(Healthy.life.expectancy, 4), 
+                 data = train_data)
+gam_preds <- predict(gam_model, newdata = test_data)
+accuracy(gam_preds, test_data$Happiness..Yesterday.)
+summary(gam_model)
+```
+
+*Insights:* 
+* It is clearly evident that  `Ladder`, `Donation`, `Freedom`, `GDP per capita` has significant influence on happiness index of a country. Also, `Healthy Life Expectancy` and `Social Support` has decent significance in determining Happiness.
+* This were the determining factors in the year 2013. The same needs to be checked for the subsequent years also to have an idea how has the determining factors changed over the years. Or which factor has remained of importance over the years.
+* `General Additive Model (GAM)` has performed better than Simple linear model as the errors have reduced, however the improvement is not extremely significant.
+
+### Let's try to fit a neural network model first and check if it can improve the accuracy of prediction.
+
+```{r}
+# prepare the data for neural network model
+x_train_nn <- model.matrix(~Ladder + Social.Support + Corruption + Freedom + Donation + GDP.per.capita + Healthy.life.expectancy, data = train_data)[, -1]
+x_mean <- apply(x_train_nn, 2, mean)
+x_sd <- apply(x_train_nn, 2, sd)
+x_train_nn <- scale(x_train_nn, center = x_mean, scale = x_sd)
+x_train_nn <- cbind.data.frame(train_data$Happiness..Yesterday., x_train_nn)
+colnames(x_train_nn)[1] <- "Happiness.Yesterday"
+
+x_test_nn <- model.matrix(~Ladder + Social.Support + Corruption + Freedom + Donation + GDP.per.capita + Healthy.life.expectancy, data = test_data)[, -1]
+x_test_nn <- scale(x_test_nn, center = x_mean, scale = x_sd)
+```
+
+```{r}
+# Fit the model
+set.seed(7)
+nn_model <- neuralnet(formula = Happiness.Yesterday ~ ., data = x_train_nn, hidden = c(6))
+nn_model$act.fct
+plot(nn_model)
+
+# predict and check for accuracy
+nn_preds <- predict(nn_model, newdata = x_test_nn)[, 1]
+accuracy(nn_preds, test_data$Happiness..Yesterday.)
+```
+
+**Next steps:** `Neural Network` has not performed any better for the data set. We can now try fitting some ensemble models which are typically better predictors than `simple linear regression` or `General Additive Models`. This is because they additively use decision tree models to reduce the error as they learn from previous versions. In every new decision tree, a regularization parameter is also used, which are controlled by `alpha` and `lambda` hyperparameters. <br>
+The objective function is the sum of squared differences between the actual and predicted values for all samples, plus a regularization term to control model complexity:
+
+$$
+Objective = Σ(yi - ŷi)^2 + Regularization \ \ Term
+$$
+
+
+```{r}
+dtrain <- xgboost::xgb.DMatrix(data = as.matrix(train_data[, -c(1, 11)]), label = train_data$Happiness..Yesterday.)
+dtest <- xgboost::xgb.DMatrix(data = as.matrix(test_data[, -c(1, 11)]), label = test_data$Happiness..Yesterday.)
+xgboost_model <- xgboost::xgboost(data = dtrain, 
+                         eta = 0.3, 
+                         colsample_bytree = 0.5,
+                         subsample = 0.5,
+                         min_child_weight = 9,
+                         max.depth = 2, 
+                         gamma = 0,
+                         
+                         verbose = T,
+                         print_every_n = 1000,
+                         nrounds = 100000,
+                         early_stopping_rounds = 20,
+                         nthread = 1,
+                         
+                         objective = "reg:squarederror",
+                         eval_metric = "rmse")
+
+xgboost_preds <- predict(xgboost_model, dtest)
+kable(accuracy(xgboost_preds, test_data$Happiness..Yesterday.))
+```
+
+**Note:** The accuracy for xgboost is clearly better than ordinary linear regression or general additive model. Both `RMSE` and `MAPE` has improved. We can try to improve this further by hyperparameter tuning. First we will try to improve some hyperparameters and then we will look at importance of the feature variables.
+
+```{r eval=FALSE}
+eta <- gamma <- seq(0.1, 1, 0.1)
+max_depth <- min_child_weight <- seq(2, 16, 2)
+colsample_bytree <- subsample <- seq(0.1, 0.9, 0.1)
+
+cv_params <- expand.grid(eta, gamma, max_depth, min_child_weight, colsample_bytree, subsample)
+names(cv_params) <- c("eta", "gamma", "max_depth", "min_child_weight", "colsample_bytree", "subsample")
+
+pd_df <- purrr::pmap_dfr(cv_params, function(eta, gamma, max_depth, min_child_weight, colsample_bytree, subsample){
+  set.seed(7)
+  xgboost_hyp <- xgboost::xgb.cv(data = dtrain, nrounds = 100000, 
+                        eta = eta, subsample = subsample,
+                        colsample_bytree = colsample_bytree,
+                        min_child_weight = min_child_weight,
+                        max.depth = max_depth,
+                        gamma = gamma,
+                        verbose = T,
+                        nfold = 4,
+                        nthread = 1,
+                        print_every_n = 1000,
+                        early_stopping_rounds = 20, 
+                        objective = "reg:squarederror",
+                        eval_metric = "rmse")
+  
+  results <- cbind.data.frame(xgboost_hyp$evaluation_log[, c("iter", "test_rmse_mean")],
+             eta = rep(eta, nrow(xgboost_hyp$evaluation_log)),
+             max.depth = rep(max_depth, nrow(xgboost_hyp$evaluation_log)),
+             min.child.weight = rep(min_child_weight, nrow(xgboost_hyp$evaluation_log)),
+             gamma = rep(gamma, nrow(xgboost_hyp$evaluation_log)),
+             colsample_bytree = rep(colsample_bytree, nrow(xgboost_hyp$evaluation_log)),
+             subsample = rep(subsample, nrow(xgboost_hyp$evaluation_log))
+             )
+  
+  
+})
+
+save(pd_df, file = "pd_df.rda")
+```
+
+**Caution:** This code runs for almost 12 hours. Please try to use the saved `rda` file instead.
+
+```{r}
+load("pd_df.rda")
+```
+
+Now, we can use the values of `hyper parameters` for lowest `test_rmse_mean` and try to fit the model.
+
+```{r}
+final_params <- pd_df[which.min(pd_df$test_rmse_mean), ]
+best_xg_model <- xgboost(data = dtrain,
+                         nrounds = 100000, 
+                         eta = final_params$eta, 
+                         subsample = final_params$subsample,
+                         colsample_bytree = final_params$colsample_bytree,
+                         max.depth = final_params$max.depth, 
+                         gamma = final_params$gamma,
+                         min_child_weight = final_params$min.child.weight,
+                         
+                         print_every_n = 1000,
+                         verbose = T,
+                         nthread = 1,
+                         early_stopping_rounds = 20,
+                         
+                         objective = "reg:squarederror",
+                         eval_metric = "rmse"
+                         )
+
+
+xgboost_preds <- predict(best_xg_model, dtest)
+kable(accuracy(xgboost_preds, test_data$Happiness..Yesterday.))
+```
+
+**Insights:** As we can see that the model `RMSE` reduced from  0.072 to 0.068 which is a minor improvement considering the time required for hyperparameter tuning. However, for critical machine learning models this kind of improvement can be considered significant. Thus, the decision to tune the hyperparameters lies on the machine learning engineer's understanding of the criticality of the situation.
+
+#### Now, let us check for other datasets also and check for the most important parameters for happiness in subsequent years.
+
+```{r}
+set.seed(7)
+split_whr_2015 <- splitstackshape::stratified(whr_2015, group = "Region", size = 0.3, bothSets = T, replace = F)
+whr_2015_train <- split_whr_2015[[2]]
+whr_2015_test <- split_whr_2015[[1]]
+```
+
+For these models we will straight away go to the complicated models like `GAM` and `XGBoost` and exclude the Neural Network as we know that it was not performing very well and the dataset is similar in nature and size.
+
+```{r}
+whr_2015_gam <- gam(formula = Happiness.Score ~ s(Standard.Error, 4) + s(Economy..GDP.per.Capita., 4) + s(Family, 4) + 
+                      s(Health..Life.Expectancy., 4) + s(Freedom, 4) + s(Trust..Government.Corruption., 4) +
+                      s(Generosity, 4) + s(Dystopia.Residual, 4), data = whr_2015_train)
+whr_2015_preds <- predict(whr_2015_gam, newdata = whr_2015_test)
+accuracy(whr_2015_preds, whr_2015_test$Happiness.Score)
+```
+
+**Insights:** Clearly, the Gam model performs extremely well under the given data set. This can most likely because `Happiness Score` is a computed data which is based on some ML based algorithm that uses similar mathematical calculations as `GAM`.
+
+#### Let us look at how the model performs towards predicting happiness index for the other years.
+
+```{r}
+whr_2016$StandardError <- whr_2016$Upper.Confidence.Interval - whr_2016$Lower.Confidence.Interval
+set.seed(7)
+split_whr_2016 <- splitstackshape::stratified(whr_2016, group = "Region", size = 0.3, bothSets = T)
+whr_2016_train <- split_whr_2016[[2]]
+whr_2016_test <- split_whr_2016[[1]]
+```
+
+```{r}
+whr_2016_gam <- gam(formula = Happiness.Score ~ s(Economy..GDP.per.Capita., 4) + 
+                      s(Family, 4) + s(Health..Life.Expectancy., 4) + s(Freedom, 4) + s(Generosity, 4) + 
+                      s(Dystopia.Residual, 4), data = whr_2016_train)
+
+whr_2016_preds <- predict(whr_2016_gam, newdata = whr_2016_test)
+accuracy(whr_2016_preds, whr_2016_test$Happiness.Score)
+```
+
+#### We can add the Standard Error column to the model which is the difference between the values in the upper and the lower confidence interval.
+```{r}
+whr_2016_gam <- gam(formula = Happiness.Score ~ s(StandardError, 4) + s(Economy..GDP.per.Capita., 4) + 
+                      s(Family, 4) + s(Health..Life.Expectancy., 4) + s(Freedom, 4) + s(Generosity, 4) + 
+                      s(Dystopia.Residual, 4), data = whr_2016_train)
+
+whr_2016_preds <- predict(whr_2016_gam, newdata = whr_2016_test)
+accuracy(whr_2016_preds, whr_2016_test$Happiness.Score)
+```
+
+**Insights:** The `RMSE` has reduced with the addition of standard error. However, `MAPE` has increased a bit. We can try to fit other more complex ensemble models. However, the performance of `GAM` model is decently satisfactory.
+
+#### Finally, we can try to fit the similar models to one of the more recent data sets. Let us fit the machine learning models to the `2023` data set.
+
+```{r}
+set.seed(7)
+train_data_indices <- sample(1:dim(whr_2023)[1], 0.8*dim(whr_2023)[1])
+train_data_2023 <- whr_2023[train_data_indices, c(1:12)]
+test_data_2023 <- whr_2023[-train_data_indices, c(1:12)]
+```
+
+
+```{r}
+whr_2023_gam <- gam(formula = paste0("Ladder.score ~ ", 
+                                     paste0("s(", setdiff(names(train_data_2023), c("Country.name", "Ladder.score", 
+                                                    "upperwhisker", "lowerwhisker", "Ladder.score.in.Dystopia")), 
+                                            ", 4)", collapse = " + ")) %>% as.formula(),
+                    data = train_data_2023)
+
+whr_2023_preds <- predict(whr_2023_gam, newdata = test_data_2023)
+accuracy(whr_2023_preds, test_data_2023$Ladder.score)
+```
+
+A deeper analysis of all the datasets is definitely possible. However, since the nature of the analysis and conclusions will be extremely similar, we can now focus on analyzing the combined data.
+
+This dataset contains rank and happiness index for all years for around 150 countries. We can try to cluster them into different groups based on year.
+
+```{r}
+cluster_data_2013 <- whr_2013_23[whr_2013_23$Year == 2013, ]
+
+fit1 <- kmeans(x = cluster_data_2013[, 2:4], centers = 5, iter.max = 1000, nstart = 25)
+cluster1 <- fit1$cluster
+summary(as.factor(cluster1))
+```
+
+**Let's check countries in each cluster. Since I have set number of centers to `5` we can run a loop 5 times to extract the countries.**
+```{r}
+for (i in 1:5){
+  cat(glue::glue("Cluster {i} countries:"), sep = "\n")
+  cat(cluster_data_2013$Country[cluster1 == i], sep = "\n")
+  cat("\n")
+}
+```
+
+This will show the countries in each cluster. However, we can see that cluster `1` has only 5 countries while all other clusters have around `40` countries. This proably means that the number of cluster = 5 is not an excellent selection of cluster count. We can do a quality check using a silhouette plot.
+
+```{r fig.align='center', fig.height=10, fig.width=15}
+# Calculate distance between samples
+dis = dist(cluster_data_2013[2:4])^2
+# Set plotting parameters to view plot
+op <- par(mfrow= c(1,1), oma= c(0,0, 3, 0),
+          mgp= c(1.6,.8,0), mar= .1+c(4,2,2,2))
+# Create silhouette for k=5
+sil = silhouette (fit1$cluster , # Set clustering
+                  dis, # Set distance 
+                  full = TRUE, # Generate silhouette for all samples
+                  
+                  )
+# Generate silhouette plot
+plot(sil, xlab = "Silhouette plot of the clusters")
+
+```
+
+Clearly, cluster 1 has a problem, which is because these 5 countries have exactly same values for Rank and Index,which made it difficult for the algorithm to separate them and they have exact same distances in the silhouette plot also. We can remove these 5 countries and check for fitting a clustering algorithm with 4 centers. Additionally, we can also evaluate to find out the optimum number of clusters for the given dataset.
+
+#### Let us evaluate the optimum number of cluster centers for clustering algorithm for a different year.
+
+```{r}
+set.seed(7)
+cluster_data_2015 <- whr_2013_23[whr_2013_23$Year==2015, ]
+fit2 <- kmeans(x = cluster_data_2015[, 2:4], centers = 6, iter.max = 1000, nstart = 5)
+cluster2 <- fit2$cluster
+summary(as.factor(cluster2))
+```
+
+For this data also, one cluster has only 5 countries. We will check the list of countries in `cluster 4`.
+
+```{r}
+cluster_data_2015$Country[cluster2==4]
+```
+
+The identified 5 countries are `Puerto Rico`, `Namibia`, `South Sudan`, `Eswatini`, `Gambia`. We will remove these five countries as the data for these countries are wrong. Then we will try to identify the optimal number of clusters for this data set.
+
+```{r}
+cluster_data_2015 <- cluster_data_2015[!cluster_data_2015$Country %in% c("Puerto Rico", "Namibia", "South Sudan", "Eswatini", "Gambia"), ]
+```
+Now that, we have removed the countries let us try to find out the optimal number number of clusters for this data set. We will do this by defining an function.
+
+```{r eval=FALSE}
+kmean_cc_no <- function(k){
+  cluster <- kmeans(x = cluster_data_2015[, 2:4], centers = k, iter.max = 1000, nstart = 25)
+  return (cluster$tot.withinss)
+}
+
+# Set maximum cluster number
+max_k <-20
+# Run algorithm over a range of cluster numbers 
+wss <- sapply(2:max_k, kmean_cc_no)
+
+# Create a data frame to plot the graph
+kmean_wcss <-data.frame(2:max_k, wss)
+```
+
+* An alternate method to do the same without using a function is to use the `map_dfr` function from the `purrr` library. The sample code will be as below.
+
+```{r}
+max_k <-20
+kmean_wcss <- map_dfr(.x = c(2:max_k), ~{
+  cluster <- kmeans(x = cluster_data_2015[, 2:4], centers = .x, iter.max = 1000, nstart = 25)
+  elbow <- data.frame(X2.max_k = .x, wss = cluster$tot.withinss)
+})
+```
+
+We can now try to plot the results to check the optimum `number of clusters`. We can do this by plotting `Within Cluster Sum of Squares` against the `Number of Clusters`.
+
+```{r}
+# Plot the graph with ggplot
+g_e1 <- ggplot(kmean_wcss, # Set dataset
+              aes(x = X2.max_k, y = wss)) + # Set aesthetics
+  theme_set(theme_bw(base_size = 22) ) + # Set theme
+  geom_point(color = "blue") + # Set geom point for scatter
+  geom_line() + # Geom line for a line between points
+  scale_x_continuous(breaks = seq(1, 20, by = 1)) + # Set breaks for x-axis
+  labs(x = "Number of Clusters", y="Within Cluster \nSum of Squares") + # Set labels
+  theme(panel.grid = element_blank(), # Turn of the background grid
+        panel.border = element_blank(),
+        panel.background = element_blank()) 
+# Generate plot
+g_e1
+```
+
+**Insights:** The fall has reduced significantly after `6`. We can choose the optimum number of clusters as `6` or `7`. Let us fit a clustering algorithm for 6 cluster centers and try to check the countries in each cluster.
+
+```{r}
+no_of_centers <- 6
+best_cluster_2015 <- kmeans(cluster_data_2015[, 2:4], centers = no_of_centers, iter.max = 1000, nstart = 25)
+ccno <- best_cluster_2015$cluster
+
+for (i in 1:no_of_centers) {
+  cat(glue::glue("Cluster {i} countries: "), sep = "\n")
+  cat(cluster_data_2015$Country[ccno == i], sep = "\n")
+  cat("\n")
+}
+```
+
+
